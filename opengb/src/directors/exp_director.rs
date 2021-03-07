@@ -30,6 +30,25 @@ impl ExplorationDirector {
             camera_rotation: 0.,
         }
     }
+
+    pub fn test_save(&self) {
+        let input = self.input_engine.borrow_mut();
+        let save_slot = if input.get_key_state(Key::Num1).pressed() {
+            1
+        } else if input.get_key_state(Key::Num2).pressed() {
+            2
+        } else if input.get_key_state(Key::Num3).pressed() {
+            3
+        } else if input.get_key_state(Key::Num4).pressed() {
+            4
+        } else {
+            -1
+        };
+
+        let mut shared_state = self.shared_state.borrow_mut();
+        let state = shared_state.persistent_state_mut();
+        state.save(save_slot);
+    }
 }
 
 impl Director for ExplorationDirector {
@@ -37,7 +56,7 @@ impl Director for ExplorationDirector {
         debug!("ExplorationDirector activated");
         scene_manager
             .core_scene_mut_or_fail()
-            .get_role_entity_mut("-1")
+            .get_role_entity_mut(-1)
             .set_active(true);
     }
 
@@ -48,6 +67,7 @@ impl Director for ExplorationDirector {
         delta_sec: f32,
     ) -> Option<Rc<RefCell<dyn Director>>> {
         self.shared_state.borrow_mut().update(delta_sec);
+        self.test_save();
 
         let input = self.input_engine.borrow_mut();
         let mut direction = Vec3::new(0., 0., 0.);
@@ -99,7 +119,7 @@ impl Director for ExplorationDirector {
         }
 
         let scene = scene_manager.core_scene_mut_or_fail();
-        let position = scene.get_role_entity("-1").transform().position();
+        let position = scene.get_role_entity(-1).transform().position();
         scene_manager
             .scene_mut()
             .unwrap()
@@ -136,13 +156,18 @@ impl Director for ExplorationDirector {
             }
         }
 
-        let entity = scene.get_role_entity_mut("-1");
+        let entity = scene.get_role_entity_mut(-1);
         if direction.norm() > 0.5 && distance_to_border > std::f32::EPSILON {
             entity.run();
             entity
                 .transform_mut()
-                .look_at(&target_position)
+                .look_at(&Vec3::new(target_position.x, position.y, target_position.z))
                 .set_position(&target_position);
+
+            self.shared_state
+                .borrow_mut()
+                .persistent_state_mut()
+                .set_position(target_position);
         } else {
             entity.idle();
         }

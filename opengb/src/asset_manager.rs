@@ -74,6 +74,11 @@ impl AssetManager {
         sce_load_from_file(&self.vfs, sce_path)
     }
 
+    pub fn load_init_sce(&self) -> SceFile {
+        let init_sce = self.basedata_path.join("init.sce");
+        sce_load_from_file(&self.vfs, init_sce)
+    }
+
     pub fn load_nav(&self, cpk_name: &str, scn_name: &str) -> NavFile {
         let nav_path = self
             .scene_path
@@ -84,8 +89,8 @@ impl AssetManager {
         nav_load_from_file(&self.vfs, nav_path)
     }
 
-    pub fn load_role(self: &Rc<Self>, role_name: &str, default_action: &str) -> RoleEntity {
-        RoleEntity::new(self.clone(), role_name, default_action)
+    pub fn load_role(self: &Rc<Self>, role_name: &str, default_action: &str) -> Option<RoleEntity> {
+        RoleEntity::new(self.clone(), role_name, default_action).ok()
     }
 
     pub fn load_role_anim_config(&self, role_name: &str) -> Ini {
@@ -100,6 +105,21 @@ impl AssetManager {
             .decode(&self.vfs.read_to_end(&path).unwrap(), DecoderTrap::Ignore)
             .unwrap();
         Ini::load_from_str(&mv3_ini).unwrap()
+    }
+
+    pub fn load_role_anim_first<'a>(
+        &self,
+        role_name: &str,
+        action_names: &[&'a str],
+    ) -> Option<(&'a str, RoleAnimation)> {
+        for action_name in action_names {
+            let anim = self.load_role_anim(role_name, action_name);
+            if anim.is_some() {
+                return Some((action_name, anim.unwrap()));
+            }
+        }
+
+        None
     }
 
     pub fn load_role_anim(&self, role_name: &str, action_name: &str) -> Option<RoleAnimation> {
@@ -127,7 +147,7 @@ impl AssetManager {
         texture_path.pop();
         texture_path.push(std::str::from_utf8(&mv3file.textures[0].names[0]).unwrap());
 
-        SimpleMaterialDef::create(&mut self.vfs.open(texture_path).unwrap(), false)
+        SimpleMaterialDef::create(self.vfs.open(texture_path).as_mut().ok(), false)
     }
 
     pub fn mv3_path(&self, role_name: &str, action_name: &str) -> PathBuf {
@@ -143,6 +163,7 @@ impl AssetManager {
         cpk_name: &str,
         scn_name: &str,
         pol_name: &str,
+        index: u16,
     ) -> Option<CoreEntity<PolModelEntity>> {
         let path = self
             .scene_path
@@ -153,7 +174,7 @@ impl AssetManager {
         if self.vfs.open(&path).is_ok() {
             Some(CoreEntity::new(
                 PolModelEntity::new(&self.factory, &self.vfs, &path),
-                "pol_obj",
+                format!("OBJECT_{}", index),
             ))
         } else {
             None
@@ -165,6 +186,7 @@ impl AssetManager {
         cpk_name: &str,
         scn_name: &str,
         pol_name: &str,
+        index: u16,
     ) -> Option<CoreEntity<CvdModelEntity>> {
         let path = self
             .scene_path
@@ -177,31 +199,41 @@ impl AssetManager {
                 self.factory.clone(),
                 &self.vfs,
                 &path,
+                format!("OBJECT_{}", index),
             ))
         } else {
             None
         }
     }
 
-    pub fn load_object_item_pol(&self, obj_name: &str) -> Option<CoreEntity<PolModelEntity>> {
+    pub fn load_object_item_pol(
+        &self,
+        obj_name: &str,
+        index: u16,
+    ) -> Option<CoreEntity<PolModelEntity>> {
         let path = self.get_object_item_path(obj_name);
         if self.vfs.open(&path).is_ok() {
             Some(CoreEntity::new(
                 PolModelEntity::new(&self.factory, &self.vfs, &path),
-                "pol_obj",
+                format!("OBJECT_{}", index),
             ))
         } else {
             None
         }
     }
 
-    pub fn load_object_item_cvd(&self, obj_name: &str) -> Option<CoreEntity<CvdModelEntity>> {
+    pub fn load_object_item_cvd(
+        &self,
+        obj_name: &str,
+        index: u16,
+    ) -> Option<CoreEntity<CvdModelEntity>> {
         let path = self.get_object_item_path(obj_name);
         if self.vfs.open(&path).is_ok() {
             Some(CvdModelEntity::create(
                 self.factory.clone(),
                 &self.vfs,
                 &path,
+                format!("OBJECT_{}", index),
             ))
         } else {
             None

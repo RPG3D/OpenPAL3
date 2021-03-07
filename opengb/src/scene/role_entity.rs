@@ -1,5 +1,5 @@
 use crate::{asset_manager::AssetManager, loaders::mv3_loader::*};
-use radiance::rendering::{ComponentFactory, MaterialDef, VertexBuffer, VertexComponents};
+use radiance::{rendering::{ComponentFactory, MaterialDef, VertexBuffer, VertexComponents}, scene::Entity};
 use radiance::scene::{CoreEntity, EntityExtension};
 use radiance::{
     math::{Vec2, Vec3},
@@ -8,16 +8,19 @@ use radiance::{
 use std::collections::HashMap;
 use std::rc::Rc;
 
-#[derive(PartialEq, Copy, Clone)]
+use super::error::EntityError;
+
+#[derive(PartialEq, Copy, Clone, Debug)]
 pub enum RoleAnimationRepeatMode {
     NoRepeat,
     Repeat,
 }
 
-#[derive(PartialEq, Copy, Clone)]
+#[derive(PartialEq, Copy, Clone, Debug)]
 pub enum RoleState {
     PlayingAnimation,
     Idle,
+    Walking,
     Running,
 }
 
@@ -28,6 +31,7 @@ pub struct RoleEntity {
     animations: HashMap<String, RoleAnimation>,
     active_anim_name: String,
     idle_anim_name: String,
+    walking_anim_name: String,
     anim_repeat_mode: RoleAnimationRepeatMode,
     is_active: bool,
     state: RoleState,
@@ -35,33 +39,47 @@ pub struct RoleEntity {
 }
 
 impl RoleEntity {
-    pub fn new(asset_mgr: Rc<AssetManager>, role_name: &str, idle_anim: &str) -> RoleEntity {
+    pub fn new(
+        asset_mgr: Rc<AssetManager>,
+        role_name: &str,
+        idle_anim: &str,
+    ) -> Result<RoleEntity, EntityError> {
         let mut idle_anim = idle_anim;
         let anim = asset_mgr
-            .load_role_anim(role_name, idle_anim)
-            .or_else(|| { idle_anim = "c01"; asset_mgr.load_role_anim(role_name, idle_anim) })
-            .or_else(|| { idle_anim = "z1"; asset_mgr.load_role_anim(role_name, idle_anim) });
-        Self::new_from_idle_animation(asset_mgr, role_name, idle_anim, anim.unwrap())
+            .load_role_anim_first(role_name, &[idle_anim, "c01", "z1"])
+            .ok_or(EntityError::EntityAnimationNotFound)?;
+
+        Ok(Self::new_from_idle_animation(
+            asset_mgr, role_name, anim.0, anim.1,
+        ))
     }
 
     pub fn new_from_idle_animation(
         asset_mgr: Rc<AssetManager>,
         role_name: &str,
-        idle_anim: &str,
-        anim: RoleAnimation,
+        idle_anim_name: &str,
+        idle_anim: RoleAnimation,
     ) -> RoleEntity {
         let mut animations = HashMap::new();
-        if !idle_anim.trim().is_empty() {
-            animations.insert(idle_anim.to_string(), anim);
+        if !idle_anim_name.trim().is_empty() {
+            animations.insert(idle_anim_name.to_string(), idle_anim);
         }
+
+        let walking_anim = asset_mgr.load_role_anim_first(role_name, &["c02", "z3"]);
+
+        let walking_anim_name = walking_anim
+            .map(|(name, _)| name)
+            .unwrap_or(idle_anim_name)
+            .to_string();
 
         Self {
             model_name: role_name.to_string(),
             asset_mgr: asset_mgr.clone(),
             component_factory: asset_mgr.component_factory().clone(),
             animations,
-            active_anim_name: idle_anim.to_string(),
-            idle_anim_name: idle_anim.to_string(),
+            active_anim_name: idle_anim_name.to_string(),
+            idle_anim_name: idle_anim_name.to_string(),
+            walking_anim_name,
             anim_repeat_mode: RoleAnimationRepeatMode::Repeat,
             is_active: false,
             state: RoleState::Idle,
@@ -84,21 +102,27 @@ impl RoleEntity {
         anim_name: &str,
         repeat_mode: RoleAnimationRepeatMode,
     ) {
-        let idle_anim_name = self.idle_anim_name.clone();
         let anim_name = if anim_name.is_empty() {
-            idle_anim_name.as_str()
+            self.idle_anim_name.to_lowercase()
         } else {
-            anim_name
+            anim_name.to_lowercase()
         };
 
-        self.state = match anim_name.to_lowercase().as_ref() {
-            "c01" => RoleState::Idle,
-            "c03" => RoleState::Running,
-            _ => RoleState::PlayingAnimation,
+        self.state = if anim_name == self.idle_anim_name.to_lowercase() {
+            RoleState::Idle
+        } else if anim_name == self.walking_anim_name.to_lowercase() {
+            RoleState::Walking
+        } else if anim_name == "c03" {
+            RoleState::Running
+        } else {
+            RoleState::PlayingAnimation
         };
 
-        if self.animations.get(anim_name).is_none() {
-            let anim = self.asset_mgr.load_role_anim(&self.model_name, anim_name).unwrap();
+        if self.animations.get(&anim_name).is_none() {
+            let anim = self
+                .asset_mgr
+                .load_role_anim(&self.model_name, &anim_name)
+                .unwrap();
             self.animations.insert(anim_name.to_string(), anim);
         }
 
@@ -119,7 +143,15 @@ impl RoleEntity {
 
     pub fn idle(self: &mut CoreEntity<Self>) {
         if self.state != RoleState::Idle {
-            self.play_anim("c01", RoleAnimationRepeatMode::Repeat);
+            let name = self.idle_anim_name.clone();
+            self.play_anim(&name, RoleAnimationRepeatMode::Repeat);
+        }
+    }
+
+    pub fn walk(self: &mut CoreEntity<Self>) {
+        if self.state != RoleState::Walking {
+            let name = self.walking_anim_name.clone();
+            self.play_anim(&name, RoleAnimationRepeatMode::Repeat);
         }
     }
 
@@ -158,14 +190,14 @@ impl EntityExtension for RoleEntity {
             let ro = rc.render_objects_mut().first_mut().unwrap();
 
             ro.update_vertices(&mut |vb: &mut VertexBuffer| {
-                self.active_anim_mut().update(delta_sec, vb)
+                self.active_anim_mut().update(delta_sec, vb, false);
             });
 
             if self.active_anim().anim_finished() {
                 self.state = RoleState::Idle;
 
                 if self.state == RoleState::Idle && self.auto_play_idle {
-                    self.play_anim("c01", RoleAnimationRepeatMode::Repeat);
+                    self.play_anim("", RoleAnimationRepeatMode::Repeat);
                 }
             }
         }
@@ -273,7 +305,7 @@ impl RoleAnimation {
         self.repeat_mode = repeat_mode;
     }
 
-    pub fn update(&mut self, delta_sec: f32, vertices: &mut VertexBuffer) {
+    pub fn update(&mut self, delta_sec: f32, vertices: &mut VertexBuffer, debug: bool) {
         let mut anim_time = (delta_sec * 4580.) as u32 + self.last_anim_time;
         let total_anim_length = *self.anim_timestamps.last().unwrap();
         if anim_time >= total_anim_length && self.repeat_mode == RoleAnimationRepeatMode::NoRepeat {
@@ -288,6 +320,9 @@ impl RoleAnimation {
             .position(|&t| t > anim_time)
             .unwrap_or(0)
             - 1;
+        if debug {
+            println!("frame_index {}", frame_index);
+        }
         let next_frame_index = (frame_index + 1) % self.anim_timestamps.len();
         let percentile = (anim_time - self.anim_timestamps[frame_index]) as f32
             / (self.anim_timestamps[next_frame_index] - self.anim_timestamps[frame_index]) as f32;

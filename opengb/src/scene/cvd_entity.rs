@@ -21,6 +21,7 @@ impl CvdModelEntity {
         component_factory: Rc<dyn ComponentFactory>,
         vfs: &MiniFs,
         path: P,
+        name: String,
     ) -> CoreEntity<Self> {
         let cvd = cvd_load_from_file(vfs, path.as_ref()).unwrap();
         let mut entity = CoreEntity::new(
@@ -31,7 +32,7 @@ impl CvdModelEntity {
                 scale_keyframes: None,
                 meshes: vec![],
             },
-            "cvd_obj",
+            name,
         );
 
         for (i, node) in cvd.models.iter().enumerate() {
@@ -91,7 +92,7 @@ impl CvdModelEntity {
                 scale_keyframes,
                 meshes,
             },
-            "cvd_obj",
+            "cvd_obj".to_string(),
         );
 
         entity.setup_transform(scale_factor);
@@ -169,7 +170,7 @@ impl CvdModelEntity {
             texture_path.push(&material.texture_name);
         }
 
-        SimpleMaterialDef::create(&mut vfs.open(texture_path).unwrap(), false)
+        SimpleMaterialDef::create(vfs.open(texture_path).as_mut().ok(), false)
     }
 }
 

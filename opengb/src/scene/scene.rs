@@ -174,14 +174,31 @@ impl ScnScene {
         )
     }
 
+    pub fn get_object<'a>(self: &'a mut CoreScene<Self>, id: i32) -> Option<&'a dyn Entity> {
+        self.entities()
+            .iter()
+            .find(|e| e.name() == format!("OBJECT_{}", id))
+            .map(|e| *e)
+    }
+
+    pub fn get_root_object_mut<'a>(
+        self: &'a mut CoreScene<Self>,
+        id: i32,
+    ) -> Option<&'a mut dyn Entity> {
+        self.root_entities_mut()
+            .iter_mut()
+            .find(|e| e.name() == format!("OBJECT_{}", id))
+            .map(|e| &mut **e)
+    }
+
     pub fn get_role_entity<'a>(
         self: &'a mut CoreScene<Self>,
-        name: &str,
+        id: i32,
     ) -> &'a CoreEntity<RoleEntity> {
         let pos = self
             .entities()
             .iter()
-            .position(|e| e.name() == name)
+            .position(|e| e.name() == format!("ROLE_{}", id))
             .unwrap();
         self.entities()
             .get(pos)
@@ -192,12 +209,12 @@ impl ScnScene {
 
     pub fn get_role_entity_mut<'a>(
         self: &'a mut CoreScene<Self>,
-        name: &str,
+        id: i32,
     ) -> &'a mut CoreEntity<RoleEntity> {
         let pos = self
             .root_entities_mut()
             .iter()
-            .position(|e| e.name() == name)
+            .position(|e| e.name() == format!("ROLE_{}", id))
             .unwrap();
         self.root_entities_mut()
             .get_mut(pos)
@@ -241,6 +258,7 @@ impl ScnScene {
                 &self.cpk_name,
                 &self.scn_file.scn_base_name,
                 &ground_pol_name,
+                std::u16::MAX,
             )
             .unwrap();
         Self::apply_position_rotation(&mut scn_object, &Vec3::new(0., 0., 0.), 0.);
@@ -249,13 +267,19 @@ impl ScnScene {
         let _self = self.extension_mut();
         for obj in &_self.scn_file.nodes {
             let mut entity: Option<Box<dyn Entity>> = None;
-            if obj.node_type == 0 {
+            if obj.nav_trigger_coord_min.0 != 0
+                || obj.nav_trigger_coord_min.1 != 0
+                || obj.nav_trigger_coord_max.0 != 0
+                || obj.nav_trigger_coord_max.1 != 0
+            {
                 _self.nav_triggers.push(SceNavTrigger {
                     nav_coord_max: obj.nav_trigger_coord_max,
                     nav_coord_min: obj.nav_trigger_coord_min,
                     sce_proc_id: obj.sce_proc_id,
                 });
-            } else if obj.node_type == 16 {
+            }
+
+            if obj.node_type == 16 {
                 _self.item_triggers.push(SceItemTrigger {
                     coord: obj.position,
                     sce_proc_id: obj.sce_proc_id,
@@ -270,35 +294,46 @@ impl ScnScene {
 
             if obj.node_type != 37 && obj.node_type != 43 && obj.name.len() != 0 {
                 if obj.name.as_bytes()[0] as char == '_' {
-                    if let Some(p) =
-                        _self
-                            .asset_mgr
-                            .load_scn_pol(&_self.cpk_name, &_self.scn_name, &obj.name)
-                    {
+                    if let Some(p) = _self.asset_mgr.load_scn_pol(
+                        &_self.cpk_name,
+                        &_self.scn_name,
+                        &obj.name,
+                        obj.index,
+                    ) {
                         entity = Some(Box::new(p));
-                    } else if let Some(c) =
-                        _self
-                            .asset_mgr
-                            .load_scn_cvd(&_self.cpk_name, &_self.scn_name, &obj.name)
-                    {
+                    } else if let Some(c) = _self.asset_mgr.load_scn_cvd(
+                        &_self.cpk_name,
+                        &_self.scn_name,
+                        &obj.name,
+                        obj.index,
+                    ) {
                         entity = Some(Box::new(c));
                     } else {
                         log::error!("Cannot load object: {}", obj.name);
                     }
                 } else if obj.name.to_lowercase().ends_with(".pol") {
                     entity = Some(Box::new(
-                        _self.asset_mgr.load_object_item_pol(&obj.name).unwrap(),
+                        _self
+                            .asset_mgr
+                            .load_object_item_pol(&obj.name, obj.index)
+                            .unwrap(),
                     ));
                 } else if obj.name.to_lowercase().ends_with(".cvd") {
                     entity = Some(Box::new(
-                        _self.asset_mgr.load_object_item_cvd(&obj.name).unwrap(),
+                        _self
+                            .asset_mgr
+                            .load_object_item_cvd(&obj.name, obj.index)
+                            .unwrap(),
                     ));
                 } else if obj.name.as_bytes()[0] as char == '+' {
                     // Unknown
                     continue;
                 } else {
                     entity = Some(Box::new(
-                        _self.asset_mgr.load_object_item_pol(&obj.name).unwrap(),
+                        _self
+                            .asset_mgr
+                            .load_object_item_pol(&obj.name, obj.index)
+                            .unwrap(),
                     ));
                 }
             }
@@ -326,38 +361,40 @@ impl ScnScene {
             -1 => 101,
             0 => 101,
             1 => 104,
+            5 => 109,
             x => x,
         }
     }
 
     fn load_roles(self: &mut CoreScene<ScnScene>) {
-        for i in -1..2 {
-            let entity_name = i.to_string();
-            let model_name = Self::map_role_id(i).to_string();
-            let role_entity = self.asset_mgr.load_role(&model_name, "C01");
-            let entity = CoreEntity::new(role_entity, &entity_name);
+        for i in &[-1, 0, 1, 5] {
+            let entity_name = format!("ROLE_{}", i);
+            let model_name = Self::map_role_id(*i).to_string();
+            let role_entity = self.asset_mgr.load_role(&model_name, "C01").unwrap();
+            let entity = CoreEntity::new(role_entity, entity_name);
             self.add_entity(Box::new(entity));
         }
 
         let mut entities = vec![];
         for role in &self.scn_file.roles {
-            let role_entity = self.asset_mgr.load_role(&role.name, &role.action_name);
-            let mut entity = CoreEntity::new(role_entity, &role.index.to_string());
-            entity
-                .transform_mut()
-                .set_position(&Vec3::new(
-                    role.position_x,
-                    role.position_y,
-                    role.position_z,
-                ))
-                // HACK
-                .rotate_axis_angle_local(&Vec3::UP, std::f32::consts::PI);
+            if let Some(role_entity) = self.asset_mgr.load_role(&role.name, &role.action_name) {
+                let mut entity = CoreEntity::new(role_entity, format!("ROLE_{}", role.index));
+                entity
+                    .transform_mut()
+                    .set_position(&Vec3::new(
+                        role.position_x,
+                        role.position_y,
+                        role.position_z,
+                    ))
+                    // HACK
+                    .rotate_axis_angle_local(&Vec3::UP, std::f32::consts::PI);
 
-            if role.sce_proc_id != 0 {
-                entity.set_active(true);
+                if role.sce_proc_id != 0 {
+                    entity.set_active(true);
+                }
+
+                entities.push(entity);
             }
-
-            entities.push(entity);
         }
 
         for e in entities {

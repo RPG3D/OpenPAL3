@@ -1,5 +1,5 @@
 use super::{
-    exp_director::ExplorationDirector, sce_commands::*, shared_state::SharedState, PersistentState,
+    exp_director::ExplorationDirector, sce_commands::*, shared_state::SharedState,
 };
 use crate::{asset_manager::AssetManager, loaders::sce_loader::SceFile};
 use encoding::{DecoderTrap, Encoding};
@@ -19,7 +19,6 @@ pub struct SceDirector {
     input_engine: Rc<RefCell<dyn InputEngine>>,
     state: SceState,
     shared_state: Rc<RefCell<SharedState>>,
-    persistent_state: Rc<RefCell<PersistentState>>,
     active_commands: Vec<Box<dyn SceCommand>>,
 }
 
@@ -74,23 +73,20 @@ impl SceDirector {
         input_engine: Rc<RefCell<dyn InputEngine>>,
         sce: SceFile,
         asset_mgr: Rc<AssetManager>,
-        persistent_state: Rc<RefCell<PersistentState>>,
+        shared_state: Rc<RefCell<SharedState>>,
     ) -> Rc<RefCell<Self>> {
-        let shared_state = Rc::new(RefCell::new(SharedState::new(&audio_engine)));
         let state = SceState::new(
             input_engine.clone(),
             audio_engine.clone(),
             asset_mgr.clone(),
             Rc::new(sce),
             shared_state.clone(),
-            persistent_state.clone(),
         );
         let director = Rc::new(RefCell::new(Self {
             shared_self: Weak::new(),
             input_engine,
             state,
             shared_state,
-            persistent_state: persistent_state,
             active_commands: vec![],
         }));
 
@@ -150,11 +146,28 @@ struct SceProcContext {
     sce: Rc<SceFile>,
     proc_id: u32,
     program_counter: usize,
+    local_vars: HashMap<i16, i32>,
 }
 
 impl SceProcContext {
-    pub fn new(sce: Rc<SceFile>, proc_id: u32) -> Self {
-        let proc = sce.proc_headers.iter().find(|h| h.id == proc_id).unwrap();
+    pub fn new_from_id(sce: Rc<SceFile>, proc_id: u32) -> Self {
+        let index = sce
+            .proc_headers
+            .iter()
+            .position(|h| h.id == proc_id)
+            .unwrap();
+        Self::new(sce, index)
+    }
+
+    pub fn new_from_name(sce: Rc<SceFile>, proc_name: &str) -> Option<Self> {
+        sce.proc_headers
+            .iter()
+            .position(|h| h.name == proc_name)
+            .and_then(|index| Some(Self::new(sce, index)))
+    }
+
+    fn new(sce: Rc<SceFile>, index: usize) -> Self {
+        let proc = &sce.proc_headers[index];
         let proc_id = proc.id;
 
         debug!(
@@ -165,7 +178,16 @@ impl SceProcContext {
             sce,
             proc_id,
             program_counter: 0,
+            local_vars: HashMap::new(),
         }
+    }
+
+    pub fn set_local(&mut self, var: i16, value: i32) {
+        self.local_vars.insert(var, value);
+    }
+
+    pub fn get_local(&mut self, var: i16) -> Option<i32> {
+        self.local_vars.get(&var).and_then(|v| Some(*v))
     }
 
     pub fn get_next_cmd(&mut self) -> Option<Box<dyn SceCommand>> {
@@ -222,6 +244,14 @@ impl SceProcContext {
                 // Let
                 command!(self, SceCommandLet, var: i16, value: i32)
             }
+            16 => {
+                //Call
+                command!(self, SceCommandCall, proc_id: u32)
+            }
+            17 | 65553 => {
+                // Rnd
+                command!(self, SceCommandRnd, var: i16, value: i32)
+            }
             20 => {
                 // RolePathTo
                 command!(
@@ -270,6 +300,18 @@ impl SceProcContext {
             33 => {
                 // CameraRotate
                 nop_command!(self, f32, f32, f32, i32)
+            }
+            34 => {
+                // CameraMove
+                command!(
+                    self,
+                    SceCommandCameraMove,
+                    position_x: f32,
+                    position_y: f32,
+                    position_z: f32,
+                    unknown_1: f32,
+                    unknown_2: f32
+                )
             }
             36 => {
                 // CameraSet
@@ -330,7 +372,7 @@ impl SceProcContext {
             }
             85 => {
                 // ObjectActive
-                nop_command!(self, i32, i32)
+                command!(self, SceCommandObjectActive, object_id: i32, active: i32)
             }
             86 => {
                 // Caption
@@ -340,28 +382,62 @@ impl SceProcContext {
                 // HY_Mode
                 nop_command!(self, i32)
             }
+            89 => {
+                // HY_FLY
+                command!(
+                    self,
+                    SceCommandHyFly,
+                    position_x: f32,
+                    position_y: f32,
+                    position_z: f32
+                )
+            }
+            104 => {
+                // APPR Entry
+                nop_command!(self)
+            }
+            108 | 65644 => {
+                // Get Appr
+                command!(self, SceCommandGetAppr, var: i16)
+            }
             115 => {
                 // Movie
                 nop_command!(self, string)
+            }
+            116 => {
+                // SetRoleTexture
+                nop_command!(self, i32, string)
             }
             118 => {
                 // Quake
                 nop_command!(self, f32, f32)
             }
+            124 => {
+                // Trigger
+                nop_command!(self, i32)
+            }
             133 => {
                 // Music
                 command!(self, SceCommandMusic, name: string, unknown: i32)
+            }
+            134 => {
+                // StopMusic
+                command!(self, SceCommandStopMusic)
             }
             201 => {
                 // RolePathOut
                 command!(
                     self,
-                    SceCommandRolePathTo,
+                    SceCommandRolePathOut,
                     role_id: i32,
                     x: i32,
                     y: i32,
                     unknown: i32
                 )
+            }
+            202 => {
+                // InTeam
+                nop_command!(self, i32, i32)
             }
             204 => {
                 // RoleCtrl
@@ -376,6 +452,10 @@ impl SceProcContext {
                     auto_play_idle: i32
                 )
             }
+            208 => {
+                // RoleMoveBack
+                command!(self, SceCommandRoleMoveBack, role_id: i32, speed: f32)
+            }
             209 => {
                 // RoleFaceRole
                 command!(self, SceCommandRoleFaceRole, role_id: i32, role_id2: i32)
@@ -383,6 +463,17 @@ impl SceProcContext {
             210 => {
                 // RoleTurnFaceA
                 command!(self, SceCommandRoleSetFace, role_id: i32, direction: i32)
+            }
+            214 => {
+                // RoleMovTo
+                command!(
+                    self,
+                    SceCommandRoleMoveTo,
+                    role_id: i32,
+                    x: i32,
+                    y: i32,
+                    unknown: i32
+                )
             }
             221 => {
                 // RoleEndAction
@@ -478,11 +569,26 @@ impl SceVmContext {
 
     pub fn call_proc(&mut self, proc_id: u32) {
         self.proc_stack
-            .push(SceProcContext::new(self.sce.clone(), proc_id))
+            .push(SceProcContext::new_from_id(self.sce.clone(), proc_id))
+    }
+
+    pub fn try_call_proc_by_name(&mut self, proc_name: &str) {
+        let context = SceProcContext::new_from_name(self.sce.clone(), proc_name);
+        if let Some(c) = context {
+            self.proc_stack.push(c)
+        }
     }
 
     pub fn jump_to(&mut self, addr: u32) {
         self.proc_stack.last_mut().unwrap().jump_to(addr);
+    }
+
+    pub fn set_local(&mut self, var: i16, value: i32) {
+        self.proc_stack.last_mut().unwrap().set_local(var, value);
+    }
+
+    pub fn get_local(&mut self, var: i16) -> Option<i32> {
+        self.proc_stack.last_mut().unwrap().get_local(var)
     }
 
     pub fn get_next_cmd(&mut self) -> Option<Box<dyn SceCommand>> {
@@ -502,7 +608,6 @@ impl SceVmContext {
 pub struct SceState {
     asset_mgr: Rc<AssetManager>,
     shared_state: Rc<RefCell<SharedState>>,
-    persistent_state: Rc<RefCell<PersistentState>>,
     fop_state: FopState,
     vm_context: SceVmContext,
     run_mode: i32,
@@ -518,14 +623,12 @@ impl SceState {
         asset_mgr: Rc<AssetManager>,
         sce: Rc<SceFile>,
         shared_state: Rc<RefCell<SharedState>>,
-        persistent_state: Rc<RefCell<PersistentState>>,
     ) -> Self {
         let ext = HashMap::<String, Box<dyn Any>>::new();
 
         Self {
             asset_mgr: asset_mgr.clone(),
             shared_state,
-            persistent_state,
             fop_state: FopState::new(),
             vm_context: SceVmContext::new(sce),
             run_mode: 1,
@@ -537,10 +640,6 @@ impl SceState {
 
     pub fn shared_state_mut(&mut self) -> RefMut<SharedState> {
         self.shared_state.borrow_mut()
-    }
-
-    pub fn persistent_state_mut(&mut self) -> RefMut<PersistentState> {
-        self.persistent_state.borrow_mut()
     }
 
     pub fn fop_state_mut(&mut self) -> &mut FopState {

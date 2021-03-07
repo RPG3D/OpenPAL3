@@ -1,25 +1,53 @@
-use std::{cell::RefCell, rc::Rc};
+use std::{
+    cell::{RefCell, RefMut},
+    rc::Rc,
+};
 
-use radiance::audio::{AudioEngine, AudioSource, AudioSourceState};
+use radiance::audio::{AudioEngine, AudioSource, AudioSourceState, Codec};
+
+use crate::asset_manager::AssetManager;
+
+use super::PersistentState;
 
 pub struct SharedState {
+    asset_mgr: Rc<AssetManager>,
     bgm_source: Box<dyn AudioSource>,
     sound_sources: Vec<Rc<RefCell<Box<dyn AudioSource>>>>,
+    persistent_state: Rc<RefCell<PersistentState>>,
 }
 
 impl SharedState {
-    pub fn new(audio_engine: &Rc<dyn AudioEngine>) -> Self {
+    pub fn new(
+        asset_mgr: Rc<AssetManager>,
+        audio_engine: &Rc<dyn AudioEngine>,
+        persistent_state: Rc<RefCell<PersistentState>>,
+    ) -> Self {
         let bgm_source = audio_engine.create_source();
         let sound_sources = vec![];
 
         Self {
+            asset_mgr,
             bgm_source,
             sound_sources,
+            persistent_state,
         }
+    }
+
+    pub fn play_bgm(&mut self, name: &str) {
+        let data = self.asset_mgr.load_music_data(name);
+        self.bgm_source.play(data, Codec::Mp3, true);
+
+        self.persistent_state
+            .borrow_mut()
+            .set_bgm_name(name.to_string());
     }
 
     pub fn bgm_source(&mut self) -> &mut dyn AudioSource {
         self.bgm_source.as_mut()
+    }
+
+    pub fn persistent_state_mut(&mut self) -> RefMut<PersistentState> {
+        self.persistent_state.borrow_mut()
     }
 
     pub fn add_sound_source(&mut self, source: Rc<RefCell<Box<dyn AudioSource>>>) {
